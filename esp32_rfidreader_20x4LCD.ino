@@ -87,3 +87,19 @@ void loop() {
     lcd.print("Waiting for card...");
   }
 }
+
+/*
+Device  Pin Name  ESP32 Pin Number  Notes
+PN532 NFC SDA GPIO 21 I2C Data line (shared bus)
+SCL GPIO 22 I2C Clock line (shared bus)
+VCC 3.3V or 5V  Power (check your PN532 specs)
+GND GND Ground
+IRQ Not connected Optional, can be left unconnected
+RST Not connected Optional, can be left unconnected
+
+| 20x4 LCD (I2C) | SDA | GPIO 21 | I2C Data line (shared bus) |
+| | SCL | GPIO 22 | I2C Clock line (shared bus) |
+| | VCC | 5V (usually) | Power (5V typically required, check LCD specs) |
+| | GND | GND | Ground |
+
+*/
