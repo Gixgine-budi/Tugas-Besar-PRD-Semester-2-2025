@@ -1,143 +1,203 @@
 #include <Wire.h>
 #include <Adafruit_PN532.h>
 #include <LiquidCrystal_I2C.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <NTPClient.h>
+#include <WiFiUdp.h>
+#include <ArduinoJson.h>
 
-// I2C setup (shared for LCD and PN532)
+std::vector<String> validUIDs;
+String getNameFromUID(String uid); // Forward declaration
+
+// ===== WiFi =====
+const char* ssid = "POCO F5";
+const char* password = "andibudicandra";
+
+// ===== Google Script URL =====
+const String scriptURL = "https://script.google.com/macros/s/AKfycbyAruSckRrB00MFOLU0rsgrCeyEKzbkgIvnnb_0l48ByN21ISg6M7OCAoE39HaXX8hqeA/exec";
+
+// ===== PN532 Setup =====
 #define SDA_PIN 21
 #define SCL_PIN 22
-
-// LED pins
-#define RED_LED    16
-#define YELLOW_LED 17
-#define GREEN_LED  18
-
-// Buzzer
-#define BUZZER_PIN 19
-
-// Known UIDs
-const uint8_t uidYellow[] = { 0xD3, 0xDE, 0x28, 0xE1 };
-const uint8_t uidGreen[]  = { 0xDF, 0x83, 0x08, 0x70 };
-const uint8_t uidRed[]    = { 0xBC, 0xDE, 0x4F, 0x05 };
-
 Adafruit_PN532 nfc(SDA_PIN, SCL_PIN);
-LiquidCrystal_I2C lcd(0x27, 20, 4);
+
+// ===== LCD Setup =====
+LiquidCrystal_I2C lcd(0x27, 20, 4); // I2C address, 20x4
+
+// ===== LED & Buzzer Pins =====
+#define RED_LED 16
+#define YELLOW_LED 17
+#define GREEN_LED 18
+#define BUZZER 19
+
+// ===== NTP Client =====
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 7 * 3600, 60000); // GMT+7 for Indonesia
+
+// ===== Known UIDs =====
+String uidYellow = "D3DE28E1";
+String uidGreen  = "DF830870";
+String uidRed    = "BCDE4F05";
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
 
-  Wire.begin(SDA_PIN, SCL_PIN);
-
-  // LCD init
-  lcd.init();
-  lcd.backlight();
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Starting NFC...");
-
-  // LED setup
+  // LEDs & Buzzer
   pinMode(RED_LED, OUTPUT);
   pinMode(YELLOW_LED, OUTPUT);
   pinMode(GREEN_LED, OUTPUT);
-  turnOffAllLEDs();
+  pinMode(BUZZER, OUTPUT);
 
-  // Buzzer setup
-  pinMode(BUZZER_PIN, OUTPUT);
-  digitalWrite(BUZZER_PIN, LOW);
+  // LCD
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Connecting to Wi-Fi");
 
-  // PN532 init
+  // Wi-Fi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  lcd.setCursor(0, 1);
+  lcd.print("Wi-Fi connected!");
+  Serial.println("Wi-Fi connected");
+
+  fetchValidUIDs();
+
+
+  // NTP
+  timeClient.begin();
+  timeClient.update();
+
+  // NFC
   nfc.begin();
   uint32_t versiondata = nfc.getFirmwareVersion();
   if (!versiondata) {
-    lcd.setCursor(0, 1);
-    lcd.print("PN532 not found");
-    Serial.println("PN532 not found");
+    Serial.println("Didn't find PN532");
     while (1);
   }
-
   nfc.SAMConfig();
-  lcd.setCursor(0, 1);
-  lcd.print("PN532 Ready");
+  Serial.println("NFC reader ready.");
   lcd.setCursor(0, 2);
-  lcd.print("Waiting for card");
+  lcd.print("NFC ready.");
 }
 
 void loop() {
-  uint8_t uid[7]; // Max UID size
+  uint8_t success;
+  uint8_t uid[7];
   uint8_t uidLength;
 
-  // Look for card
-  if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
-    Serial.print("UID: ");
+  success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength);
+
+  if (success) {
+    String scannedUID = "";
+    for (uint8_t i = 0; i < uidLength; i++) {
+      scannedUID += String(uid[i], HEX);
+    }
+    scannedUID.toUpperCase();
+
+    Serial.print("Card UID: ");
+    Serial.println(scannedUID);
     lcd.clear();
     lcd.setCursor(0, 0);
-    lcd.print("UID: ");
+    lcd.print("UID: " + scannedUID);
 
-    for (uint8_t i = 0; i < uidLength; i++) {
-      Serial.print(uid[i], HEX);
-      Serial.print(" ");
-      lcd.print(uid[i] < 0x10 ? "0" : "");
-      lcd.print(uid[i], HEX);
-      lcd.print(" ");
+    // Check UID and light up LED
+    bool isValid = false;
+
+    for (String knownUID : validUIDs) {
+      if (scannedUID == knownUID) {
+        isValid = true;
+        break;
+      }
     }
-    Serial.println();
 
-    lcd.setCursor(0, 2);
-
-    // Compare to known UIDs
-    if (uidLength == 4 && memcmp(uid, uidYellow, 4) == 0) {
-      lcd.print("Yellow card found");
-      showColor(YELLOW_LED);
-      beepBuzzer(100);
-      delay(100);
-      beepBuzzer(100);
-    } else if (uidLength == 4 && memcmp(uid, uidGreen, 4) == 0) {
-      lcd.print("Green card found");
-      showColor(GREEN_LED);
-      beepBuzzer(100);
-    } else if (uidLength == 4 && memcmp(uid, uidRed, 4) == 0) {
-      lcd.print("Red card found");
-      showColor(RED_LED);
-      beepBuzzer(100);
-      delay(100);
-      beepBuzzer(100);
-      delay(100);
-      beepBuzzer(100);
+    String color = "Unknown";
+    if (isValid) {
+      // Map colors manually if you like:
+      if (scannedUID == "D3DE28E1") {
+        digitalWrite(YELLOW_LED, HIGH); color = "Yellow";
+      } else if (scannedUID == "DF830870") {
+        digitalWrite(GREEN_LED, HIGH); color = "Green";
+      } else if (scannedUID == "BCDE4F05") {
+        digitalWrite(RED_LED, HIGH); color = "Red";
+      } else {
+        digitalWrite(GREEN_LED, HIGH);
+        color = "Valid";
+      }
     } else {
-      lcd.print("Unknown card!");
-      showAllColors();
-      beepBuzzer(100);
-      delay(100);
-      beepBuzzer(100);
-      delay(100);
-      beepBuzzer(100);
+      digitalWrite(RED_LED, HIGH);
+      digitalWrite(GREEN_LED, HIGH);
+      digitalWrite(YELLOW_LED, HIGH);
     }
 
-    delay(2000);
-    lcd.setCursor(0, 3);
-    lcd.print("Scan another card");
+
+    // Buzz
+    digitalWrite(BUZZER, HIGH);
+    delay(100);
+    digitalWrite(BUZZER, LOW);
+
+    // Time
+    timeClient.update();
+    String timeStamp = timeClient.getFormattedTime();
+
+    // LCD update
+    lcd.setCursor(0, 1);
+    lcd.print("Color: " + color);
+    lcd.setCursor(0, 2);
+    lcd.print("Time: " + timeStamp);
+
+    // Send to Google Sheets
+    sendToSheet(scannedUID, isValid);
+
+    delay(3000); // Wait to avoid reading the same card again
+    lcd.clear();
   }
 }
 
-void turnOffAllLEDs() {
-  digitalWrite(RED_LED, LOW);
-  digitalWrite(YELLOW_LED, LOW);
-  digitalWrite(GREEN_LED, LOW);
+void sendToSheet(String uid, bool isValid) {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    String fullURL = scriptURL + "?uid=" + uid + "&valid=" + (isValid ? "true" : "false");
+    http.begin(fullURL);
+    int httpCode = http.GET();
+
+    if (httpCode > 0) {
+      Serial.println("Sent to Google Sheet.");
+    } else {
+      Serial.print("Error sending: ");
+      Serial.println(httpCode);
+    }
+    http.end();
+  }
 }
 
-void showColor(uint8_t pin) {
-  turnOffAllLEDs();
-  digitalWrite(pin, HIGH);
-}
 
-void showAllColors() {
-  digitalWrite(RED_LED, HIGH);
-  digitalWrite(YELLOW_LED, HIGH);
-  digitalWrite(GREEN_LED, HIGH);
-}
+void fetchValidUIDs() {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    http.begin("https://script.google.com/macros/s/AKfycbzxLjfSOpNDpW8JNFtyH5PaDZmIeuWTHa_OS_mtDCtQdSgoK32SUGyABn8tBmGq1qpq/exec");  // Replace with your link
+    int httpCode = http.GET();
 
-void beepBuzzer(uint8_t time) {
-  digitalWrite(BUZZER_PIN, HIGH);
-  delay(time); // short beep
-  digitalWrite(BUZZER_PIN, LOW);
+    if (httpCode == 200) {
+      String payload = http.getString();
+      Serial.println("UID List received:");
+      Serial.println(payload);
+
+      DynamicJsonDocument doc(2048);
+      deserializeJson(doc, payload);
+
+      validUIDs.clear();
+      for (JsonObject obj : doc.as<JsonArray>()) {
+        validUIDs.push_back(obj["uid"].as<String>());
+      }
+    } else {
+      Serial.println("Failed to fetch UID list.");
+    }
+
+    http.end();
+  }
 }
