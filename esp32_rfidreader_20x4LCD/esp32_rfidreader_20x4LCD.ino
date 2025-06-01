@@ -22,8 +22,8 @@ Adafruit_PN532 nfc(-1, -1, &Wire);
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 
 // ===== WIFI SETUP =====
-const char* ssid = "POCO F5";
-const char* password = "andibudicandra";
+const char* ssid = "YOURWIFINAME"; // EDIT BEFORE USE
+const char* password = "YOURWIFIPASS";
 
 // ===== GOOGLE SHEETS URL (Unified Script) =====
 const char* GOOGLE_SHEETS_UNIFIED_URL = "https://script.google.com/macros/s/AKfycbzQm1n0TXx7P0oZokOIcK6Mgbl9rpQa-QiMsPabPd2lLcgdmjVdvERxmr2VEaN8lNhSaQ/exec"; // PASTE URL FROM DEPLOYED SCRIPT
